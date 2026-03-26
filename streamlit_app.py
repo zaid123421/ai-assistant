@@ -15,7 +15,7 @@ if os.environ.get("GOOGLE_API_KEY") in (None, ""):
     except (KeyError, FileNotFoundError):
         pass
 
-from main import CHROMA_DIR, ask, create_vector_store, load_documents, split_docs
+from main import CHROMA_DIR, ask, create_vector_store, load_documents, split_docs, message_to_text
 
 
 @st.cache_resource(show_spinner="Building knowledge index...")
@@ -44,4 +44,4 @@ question = st.text_input("Your question", placeholder="e.g. What services does S
 if st.button("Ask", type="primary") and question.strip():
     with st.spinner("Answering..."):
         response = ask(question.strip(), vs)
-    st.markdown(response.content)
+    st.markdown(message_to_text(response))
