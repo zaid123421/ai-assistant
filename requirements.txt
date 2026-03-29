@@ -6,3 +6,4 @@ langchain-text-splitters>=0.3.0
 langchain-core>=0.3.0
 chromadb>=0.4.22
 pypdf>=4.0.0
+ddgs>=9.0.0

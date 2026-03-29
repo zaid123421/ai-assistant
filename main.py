@@ -1,6 +1,9 @@
+import json
 import os
+import re
 import shutil
 from dotenv import load_dotenv
+from langchain_core.messages import AIMessage
 from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain_community.document_loaders import PyPDFLoader, TextLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -61,20 +64,122 @@ def create_vector_store(chunks):
     return Chroma.from_documents(chunks, embeddings, persist_directory=CHROMA_DIR)
 
 
+def _parse_json_object(text: str) -> dict | None:
+    text = (text or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```\s*$", "", text)
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        start, end = text.find("{"), text.rfind("}")
+        if start != -1 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except json.JSONDecodeError:
+                return None
+        return None
+
+
+def _search_web_snippets(user_query: str, max_chars: int = 8000) -> str:
+    from langchain_community.tools import DuckDuckGoSearchRun
+
+    tool = DuckDuckGoSearchRun()
+    out = tool.run(user_query)
+    if isinstance(out, str) and len(out) > max_chars:
+        return out[:max_chars].rsplit("\n", 1)[0] + "\n…"
+    return out or ""
+
+
 def ask(query, vector_store):
     llm = ChatGoogleGenerativeAI(model="gemini-3.1-flash-lite-preview")
+    route_llm = ChatGoogleGenerativeAI(
+        model="gemini-3.1-flash-lite-preview",
+        temperature=0,
+    )
     relevant = vector_store.similarity_search(query, k=12)
     context = "\n".join([d.page_content for d in relevant])
-    prompt = f"""You are a helpful assistant for SweetSpot / company documents.
-        RULES:
-        1. For questions about content that appears in the CONTEXT below, answer ONLY using that context. Do not invent facts.
-        2. For greetings or small talk (e.g. hi, hello, thanks), reply briefly and politely in one or two sentences, then invite the user to ask about the company or services.
-        3. If the user asks something that is NOT answered by the context (or the context is empty for that topic), do NOT stay silent. Reply clearly that you do not have that information in the provided documents, and suggest they ask about topics that are in the documents (e.g. services, about us, contact).
-        Context:
-        {context}
-        Question: {query}
-        Answer:"""
-    return llm.invoke(prompt)
+
+    route_prompt = f"""You route questions for an assistant that has internal CONTEXT (company documents).
+
+CONTEXT (may be partial):
+---
+{context}
+---
+
+USER QUESTION:
+{query}
+
+Reply with ONLY a JSON object (no markdown fences), exactly this shape:
+{{"is_smalltalk": <true only for greetings, thanks, or brief chat that needs no facts>,
+ "answered_from_docs": <true if CONTEXT fully supports a factual answer to the question>,
+ "answer": "<when is_smalltalk or answered_from_docs is true, your reply; use CONTEXT only for facts; otherwise empty string>"}}
+
+Rules:
+- If is_smalltalk is true, set answered_from_docs to true and put a short polite reply in answer (invite questions about the company if appropriate).
+- If the question asks for facts not in CONTEXT, set answered_from_docs to false, is_smalltalk to false, answer "".
+- Never invent company facts; only use CONTEXT when answered_from_docs is true."""
+
+    route_raw = message_to_text(route_llm.invoke(route_prompt))
+    data = _parse_json_object(route_raw)
+
+    if data is None:
+        prompt = f"""You are a helpful assistant for SweetSpot / company documents.
+RULES:
+1. Answer ONLY from CONTEXT when it contains the answer. Do not invent facts.
+2. For greetings or small talk, reply briefly and politely.
+3. If CONTEXT does not answer the question, say clearly you do not have that in the documents.
+
+CONTEXT:
+{context}
+Question: {query}
+Answer:"""
+        return llm.invoke(prompt)
+
+    is_smalltalk = data.get("is_smalltalk") is True
+    answered_from_docs = data.get("answered_from_docs") is True
+    routed_answer = (data.get("answer") or "").strip()
+
+    if is_smalltalk or answered_from_docs:
+        if not routed_answer:
+            routed_answer = (
+                "I don’t have enough to answer from the internal documents; "
+                "please rephrase or ask about services, about us, or contact."
+            )
+        return AIMessage(content=routed_answer)
+
+    try:
+        web_text = _search_web_snippets(query)
+    except Exception as exc:
+        return AIMessage(
+            content=(
+                f"I couldn’t search the web ({exc}). "
+                "Check your network connection, or try again later."
+            )
+        )
+
+    if not web_text.strip():
+        return AIMessage(
+            content=(
+                "The documents don’t cover this, and there were no useful web search "
+                "results. Try rephrasing the question."
+            )
+        )
+
+    synth = f"""The user asked a question that is NOT covered by internal company documents, so you are answering using WEB SEARCH SNIPPETS below (may be incomplete or wrong).
+
+Reply in the SAME language as the user’s question (Arabic or English, etc.).
+Start with one short line that the following comes from the web, not from company files.
+Then give a concise, helpful answer. If snippets are irrelevant, say so briefly.
+
+USER QUESTION:
+{query}
+
+WEB SEARCH SNIPPETS:
+{web_text}
+
+Your answer:"""
+    return llm.invoke(synth)
 
 
 if __name__ == "__main__":
