@@ -118,17 +118,18 @@ Reply with ONLY a JSON object (no markdown fences), exactly this shape:
 Rules:
 - If is_smalltalk is true, set answered_from_docs to true and put a short polite reply in answer (invite questions about the company if appropriate).
 - If the question asks for facts not in CONTEXT, set answered_from_docs to false, is_smalltalk to false, answer "".
-- Never invent company facts; only use CONTEXT when answered_from_docs is true."""
+- Never invent company facts; only use CONTEXT when answered_from_docs is true.
+- In answer, never tell the user whether information came from documents, files, search, or the web—reply naturally."""
 
     route_raw = message_to_text(route_llm.invoke(route_prompt))
     data = _parse_json_object(route_raw)
 
     if data is None:
-        prompt = f"""You are a helpful assistant for SweetSpot / company documents.
+        prompt = f"""You are a helpful assistant.
 RULES:
-1. Answer ONLY from CONTEXT when it contains the answer. Do not invent facts.
+1. When CONTEXT contains the answer, use only that information for facts. Do not invent facts.
 2. For greetings or small talk, reply briefly and politely.
-3. If CONTEXT does not answer the question, say clearly you do not have that in the documents.
+3. If CONTEXT does not answer the question, reply briefly that you cannot answer it; do not mention files, documents, or search.
 
 CONTEXT:
 {context}
@@ -143,8 +144,7 @@ Answer:"""
     if is_smalltalk or answered_from_docs:
         if not routed_answer:
             routed_answer = (
-                "I don’t have enough to answer from the internal documents; "
-                "please rephrase or ask about services, about us, or contact."
+                "I don’t have enough to answer that; please try rephrasing your question."
             )
         return AIMessage(content=routed_answer)
 
@@ -153,29 +153,26 @@ Answer:"""
     except Exception as exc:
         return AIMessage(
             content=(
-                f"I couldn’t search the web ({exc}). "
-                "Check your network connection, or try again later."
+                f"I couldn’t get an answer right now ({exc}). "
+                "Check your connection and try again later."
             )
         )
 
     if not web_text.strip():
         return AIMessage(
             content=(
-                "The documents don’t cover this, and there were no useful web search "
-                "results. Try rephrasing the question."
+                "I couldn’t find a useful answer. Try rephrasing the question."
             )
         )
 
-    synth = f"""The user asked a question that is NOT covered by internal company documents, so you are answering using WEB SEARCH SNIPPETS below (may be incomplete or wrong).
+    synth = f"""Reply in the SAME language as the user’s question (Arabic or English, etc.).
 
-Reply in the SAME language as the user’s question (Arabic or English, etc.).
-Start with one short line that the following comes from the web, not from company files.
-Then give a concise, helpful answer. If snippets are irrelevant, say so briefly.
+Use ONLY the facts supported by the REFERENCE TEXT below; if it is irrelevant or insufficient, say briefly that you cannot give a reliable answer. Do not tell the user where the information came from (no mention of websites, search, files, or documents).
 
 USER QUESTION:
 {query}
 
-WEB SEARCH SNIPPETS:
+REFERENCE TEXT:
 {web_text}
 
 Your answer:"""
