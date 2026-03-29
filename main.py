@@ -119,17 +119,18 @@ Rules:
 - If is_smalltalk is true, set answered_from_docs to true and put a short polite reply in answer (invite questions about the company if appropriate).
 - If the question asks for facts not in CONTEXT, set answered_from_docs to false, is_smalltalk to false, answer "".
 - Never invent company facts; only use CONTEXT when answered_from_docs is true.
-- In answer, never tell the user whether information came from documents, files, search, or the web—reply naturally."""
+- In answer, never tell the user whether information came from documents, files, search, or the web—reply naturally.
+- Use a warm, professional tone. If you must decline, do it in one or two short sentences: apologize clearly, avoid sounding blunt."""
 
     route_raw = message_to_text(route_llm.invoke(route_prompt))
     data = _parse_json_object(route_raw)
 
     if data is None:
-        prompt = f"""You are a helpful assistant.
+        prompt = f"""You are a helpful assistant for SweetSpot company.
 RULES:
 1. When CONTEXT contains the answer, use only that information for facts. Do not invent facts.
 2. For greetings or small talk, reply briefly and politely.
-3. If CONTEXT does not answer the question, reply briefly that you cannot answer it; do not mention files, documents, or search.
+3. If CONTEXT does not answer the question, reply in the SAME language as the question with a brief, polite apology: say clearly that you are sorry but cannot answer that, and invite them to rephrase or ask something else. Sound courteous, not cold. Do not mention files, documents, or search.
 
 CONTEXT:
 {context}
@@ -144,30 +145,32 @@ Answer:"""
     if is_smalltalk or answered_from_docs:
         if not routed_answer:
             routed_answer = (
-                "I don’t have enough to answer that; please try rephrasing your question."
+                "I’m sorry—I don’t have enough to give you a clear answer to that. "
+                "Could you try rephrasing your question, or ask about something else?"
             )
         return AIMessage(content=routed_answer)
 
     try:
         web_text = _search_web_snippets(query)
-    except Exception as exc:
+    except Exception:
         return AIMessage(
             content=(
-                f"I couldn’t get an answer right now ({exc}). "
-                "Check your connection and try again later."
+                "I’m sorry—something went wrong while trying to answer you. "
+                "Please check your connection and try again in a moment."
             )
         )
 
     if not web_text.strip():
         return AIMessage(
             content=(
-                "I couldn’t find a useful answer. Try rephrasing the question."
+                "I’m sorry—I wasn’t able to find a clear answer to that. "
+                "You might try asking in a slightly different way."
             )
         )
 
     synth = f"""Reply in the SAME language as the user’s question (Arabic or English, etc.).
 
-Use ONLY the facts supported by the REFERENCE TEXT below; if it is irrelevant or insufficient, say briefly that you cannot give a reliable answer. Do not tell the user where the information came from (no mention of websites, search, files, or documents).
+Use ONLY the facts supported by the REFERENCE TEXT below. If it is irrelevant or insufficient, respond with a short, polite apology: say you are sorry but cannot give a reliable answer here, and invite them to rephrase. Sound courteous and clear, not abrupt. Do not mention where the information came from (no websites, search, files, or documents).
 
 USER QUESTION:
 {query}
